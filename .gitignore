@@ -22,3 +22,11 @@ downloads/
 # 系统
 Thumbs.db
 Desktop.ini
+
+# Agent
+agent.md
+AGENTS.md
+CLAUDE.md
+
+# 其他
+*.bat
