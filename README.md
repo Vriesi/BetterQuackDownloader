@@ -1,10 +1,10 @@
 # 夸克网盘多线程下载器
 
-一个支持多线程下载、断点续传的夸克网盘下载工具，提供友好的 GUI 界面。
+一个支持多线程下载、断点续传的夸克网盘下载工具，提供友好的 GUI 界面。打包后无需 Python 环境即可使用。
 
 ## ✨ 功能特性
 
-- 🔐 **Cookie 登录** - 通过内置浏览器获取夸克网盘 Cookie
+- 🔐 **Cookie 登录** - 通过内置浏览器获取夸克网盘 Cookie（无需 Python 环境）
 - 🔗 **分享链接解析** - 自动解析夸克分享链接，列出文件列表
 - ⬇️ **多线程下载** - 支持最多 1024 线程并发下载
 - 🔄 **断点续传** - 支持暂停/恢复下载，自动续传
@@ -51,18 +51,20 @@ graph TD
 
 ## 🚀 快速开始
 
-### 使用打包版本
+### 使用打包版本（推荐）
 
 1. 从 Releases 下载 `QuarkDownloader.exe`
-2. 双击运行（获取cookie功能需要电脑中包含python3.8+环境）
+2. 双击运行，无需安装 Python 或任何依赖
 
 ## 📖 使用说明
 
-### 1. 获取 Cookie（获取cookie功能需要电脑中包含python3.8+环境）
+### 1. 获取 Cookie
 
 - 点击 **🌐 获取 Cookie** 按钮
 - 在弹出的浏览器窗口中登录夸克账号
 - 登录成功后 Cookie 会自动填入
+
+> 💡 打包版本内置了 Edge WebView2 浏览器，无需 Python 环境
 
 ### 2. 下载分享文件
 
@@ -83,30 +85,22 @@ graph TD
 | 分片 MB | 1 | 每个分片的大小（1-64 MB） |
 | 输出目录 | ./downloads | 文件保存位置 |
 
-输出文件：`dist/QuarkDownloader.exe`（约 86MB）
-
 ## 📦 项目结构
 
 ```
-quack/
-├── quarkdl_gui.pyw      # 主程序（GUI，无控制台）
-├── quarkdl_gui.py        # 同上（调试用，有控制台）
-├── quarkdl.py            # 旧版独立核心库（保留备用）
-├── quarkdl_login.py      # 旧版独立登录脚本（已内嵌）
-├── quarkdl_manage.py     # 旧版独立管理脚本（已内嵌）
-├── icon.ico              # 应用图标
-├── .quarkdl_cookies.json # Cookie 持久化存储
-├── downloads/            # 默认下载目录
-└── README.md             # 本文件
+BetterQuackDownload/
+├── main.py              # 入口文件（CLI 参数解析）
+├── client.py            # API 客户端（QuarkClient）
+├── downloader.py        # 下载器（MultiThreadDownloader）
+├── gui.py               # GUI 界面（QuarkGUI）
+├── utils.py             # 工具函数、常量定义
+├── scripts.py           # 浏览器功能（pywebview 直接调用）
+├── icon.ico             # 应用图标
+├── .quarkdl_cookies.json # Cookie 持久化存储（运行时生成）
+├── downloads/           # 默认下载目录
+├── AGENTS.md            # 开发文档
+└── README.md            # 本文件
 ```
-
-## 🔧 技术栈
-
-- **GUI 框架**: CustomTkinter（原生圆角控件）
-- **浏览器**: pywebview（内置 WebView）
-- **HTTP 客户端**: requests
-- **图像处理**: Pillow（图标转换）
-- **打包工具**: PyInstaller
 
 ## 📝 命令行模式
 
@@ -114,14 +108,14 @@ quack/
 
 ```bash
 # 下载分享文件
-python quarkdl_gui.py --cookie "your_cookie" --url "https://pan.quark.cn/s/xxxx"
+python main.py --cookie "your_cookie" --url "https://pan.quark.cn/s/xxxx"
 
 # 下载指定文件
-python quarkdl_gui.py --cookie "your_cookie" --fid "file_fid"
+python main.py --cookie "your_cookie" --fid "file_fid"
 
 # 列出网盘文件
-python quarkdl_gui.py --cookie "your_cookie" list
+python main.py --cookie "your_cookie" list
 
 # 查看帮助
-python quarkdl_gui.py --help
+python main.py --help
 ```
