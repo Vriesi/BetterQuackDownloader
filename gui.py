@@ -6,10 +6,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
-import os
 import shutil
-import subprocess
-import sys
 import threading
 import time
 import tkinter as tk
@@ -20,7 +17,7 @@ import customtkinter as ctk
 
 from client import QuarkClient
 from downloader import MultiThreadDownloader, _download_chunk
-from scripts import LOGIN_SCRIPT, MANAGE_SCRIPT, write_temp_script
+from scripts import open_login_window, open_manage_window
 from utils import (
     _exe_dir, _resource_dir, COOKIE_FILE, FONT, FONT_MONO,
     human_bytes, plan_ranges, parse_share_url
@@ -109,7 +106,7 @@ class QuarkGUI:
         ctk.CTkLabel(inner, text="夸克网盘下载器",
                      font=ctk.CTkFont(family=FONT, size=16, weight="bold"),
                      text_color=c["text"]).pack(side="left")
-        ctk.CTkLabel(inner, text="获取 cookie 需要 python3.8+ 环境",
+        ctk.CTkLabel(inner, text="BetterQuackDownloader",
                      font=ctk.CTkFont(family=FONT, size=10),
                      text_color=c["text_dim"]).pack(side="right")
 
@@ -377,73 +374,31 @@ class QuarkGUI:
     #  获取 Cookie / 管理账号
     # ═══════════════════════════════════════════
 
-    def _find_python(self) -> str:
-        """查找 Python 解释器"""
-        if not getattr(sys, 'frozen', False):
-            return sys.executable
-
-        python_path = shutil.which("python3") or shutil.which("python")
-        if python_path:
-            return python_path
-
-        possible_paths = [
-            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python312\python.exe"),
-            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python311\python.exe"),
-            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python310\python.exe"),
-            os.path.expandvars(r"%PROGRAMFILES%\Python312\python.exe"),
-            os.path.expandvars(r"%PROGRAMFILES%\Python311\python.exe"),
-            os.path.expandvars(r"%PROGRAMFILES%\Python310\python.exe"),
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                return path
-
-        return sys.executable
-
     def _open_account_manager(self) -> None:
-        script = write_temp_script("_quarkdl_manage_tmp.py", MANAGE_SCRIPT, _exe_dir())
-        python = self._find_python()
-        subprocess.Popen(
-            [python, str(script)],
-            cwd=str(_exe_dir()),
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
+        """打开网盘管理窗口"""
+        self.log("正在打开网盘管理窗口...")
+        # pywebview 必须在主线程运行，使用 after 延迟调用
+        self.root.after(100, open_manage_window)
 
     def _open_login_browser(self) -> None:
+        """打开登录窗口获取 Cookie"""
         self.btn_login.configure(state="disabled", text="登录中...")
         self.log("正在打开夸克登录页面，请在弹出的窗口中登录...")
 
-        cookie_file = _exe_dir() / ".quarkdl_login_cookie.tmp"
-        if cookie_file.exists():
-            cookie_file.unlink()
-
-        script = write_temp_script("_quarkdl_login_tmp.py", LOGIN_SCRIPT, _exe_dir())
-        python = self._find_python()
-        self._login_proc = subprocess.Popen(
-            [python, str(script), str(cookie_file)],
-            cwd=str(_exe_dir()),
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-
-        def wait_for_result():
-            if cookie_file.exists():
-                cookie = cookie_file.read_text(encoding="utf-8").strip()
-                cookie_file.unlink(missing_ok=True)
-                if cookie:
-                    self.ent_cookie.delete("0.0", "end")
-                    self.ent_cookie.insert("0.0", cookie)
-                    self._save_cookie(cookie)
-                    self.log("Cookie 获取成功！", "ok")
-                else:
-                    self.log("未检测到登录状态，请重试", "warn")
-                self.btn_login.configure(state="normal", text="🌐 获取 Cookie")
-            elif self._login_proc.poll() is None:
-                self.root.after(500, wait_for_result)
+        def do_login():
+            cookie_file = _exe_dir() / ".quarkdl_login_cookie.tmp"
+            cookie = open_login_window(cookie_file)
+            if cookie:
+                self.ent_cookie.delete("0.0", "end")
+                self.ent_cookie.insert("0.0", cookie)
+                self._save_cookie(cookie)
+                self.log("Cookie 获取成功！", "ok")
             else:
-                self.log("浏览器已关闭，未获取到 Cookie", "warn")
-                self.btn_login.configure(state="normal", text="🌐 获取 Cookie")
+                self.log("未获取到 Cookie，请重试", "warn")
+            self.btn_login.configure(state="normal", text="🌐 获取 Cookie")
 
-        self.root.after(1000, wait_for_result)
+        # pywebview 必须在主线程运行
+        self.root.after(100, do_login)
 
     # ═══════════════════════════════════════════
     #  日志
