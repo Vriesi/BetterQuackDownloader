@@ -134,6 +134,7 @@ def _cdn_headers() -> dict[str, str]:
 
 
 def _copy_session(source: requests.Session) -> requests.Session:
+    """复制 session（保留 cookies）"""
     s = requests.Session()
     s.cookies.update(source.cookies)
     return s
@@ -499,6 +500,7 @@ def _download_chunk(
     last_error = "unknown"
     for attempt in range(1, retries + 1):
         try:
+            # 每个线程复制 session，避免线程安全问题
             session = _copy_session(source_session)
             with session.get(url, headers=headers, stream=True, timeout=(15, 60)) as resp:
                 if resp.status_code != 206:
@@ -1344,7 +1346,8 @@ class QuarkGUI:
 
                         now = time.time()
                         elapsed = now - last_print
-                        if elapsed >= 0.5 or done_count == total:
+                        # 每秒更新一次进度，减少 GUI 开销
+                        if elapsed >= 1.0 or done_count == total:
                             instant = (done_bytes - last_bytes) / elapsed if elapsed > 0 else 0
                             smooth_speed = instant if smooth_speed == 0 else smooth_speed * 0.6 + instant * 0.4
                             pct = done_bytes * 100 // size if size else 0
