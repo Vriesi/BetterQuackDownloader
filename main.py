@@ -17,6 +17,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import tkinter.font as tkFont
 
 import requests
 import customtkinter as ctk
@@ -52,8 +53,22 @@ def _resource_dir() -> Path:
 
 COOKIE_FILE = _exe_dir() / ".quarkdl_cookies.json"
 
-FONT = "Microsoft YaHei UI"
-FONT_MONO = "Cascadia Code"
+# 字体配置：优先 Mi Sans，fallback微软雅黑
+_FONT_FAMILIES = set()
+def _get_font_families():
+    if not _FONT_FAMILIES:
+        _root = tk.Tk()
+        _root.withdraw()
+        _FONT_FAMILIES.update(tkFont.families())
+        _root.destroy()
+    return _FONT_FAMILIES
+
+def _pick_font(preferred, fallback="Microsoft YaHei UI"):
+    families = _get_font_families()
+    return preferred if preferred in families else fallback
+
+FONT = _pick_font("Mi Sans")
+FONT_MONO = _pick_font("Mi Sans Mono", "Cascadia Code")
 
 PC_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -265,12 +280,17 @@ class QuarkClient:
             td = data.get("data") or {}
             if td.get("status") == 2:
                 return td
+            # 如果任务失败，提前终止
+            if td.get("status") == 3:
+                raise RuntimeError(f"转存任务失败: {td.get('message', '未知错误')}")
         raise RuntimeError("转存任务超时")
 
-    def list_files(self, pdir_fid: str = "0") -> list[dict]:
+    def list_files(self, pdir_fid: str = "0", log_func=None) -> list[dict]:
         files = []
         page = 1
         while True:
+            if log_func:
+                log_func(f"扫描网盘第 {page} 页...")
             resp = self.session.get(
                 f"{BASE_URL}/1/clouddrive/file/sort",
                 params=self._params({
@@ -292,6 +312,11 @@ class QuarkClient:
             if len(rows) < 100:
                 break
             page += 1
+            # 防止无限循环
+            if page > 100:
+                if log_func:
+                    log_func("警告：扫描页数超过 100 页，停止扫描")
+                break
         return files
 
     def get_download_url(self, fid: str) -> str:
@@ -1049,6 +1074,42 @@ class QuarkGUI:
         entry.bind("<FocusOut>", apply)
 
     # ═══════════════════════════════════════════
+    #  从转存任务结果提取文件信息
+    # ═══════════════════════════════════════════
+
+    def _extract_files_from_task(self, task_result: dict, fid_list: list[dict]) -> list[dict]:
+        """尝试从转存任务结果中提取文件信息，避免全盘扫描"""
+        try:
+            # 夸克 API 可能在 save_as 中返回文件信息
+            save_as = task_result.get("save_as", {})
+            if not save_as:
+                return []
+
+            # 尝试从 save_as 中获取文件列表
+            files = save_as.get("save_as_top_fids", [])
+            if not files:
+                return []
+
+            # 构建文件信息列表
+            result = []
+            for fid_info in files:
+                fid = fid_info.get("fid", "")
+                if not fid:
+                    continue
+                # 尝试匹配原始文件信息
+                original = next((f for f in fid_list if f["file_name"] == fid_info.get("file_name")), None)
+                if original:
+                    result.append({
+                        "fid": fid,
+                        "file_name": original["file_name"],
+                        "size": original.get("size", 0),
+                        "is_dir": False,
+                    })
+            return result
+        except Exception:
+            return []
+
+    # ═══════════════════════════════════════════
     #  解析分享链接
     # ═══════════════════════════════════════════
 
@@ -1170,15 +1231,31 @@ class QuarkGUI:
                     fids = [f["fid"] for f in fid_list]
                     tokens = [f["share_fid_token"] for f in fid_list]
                     task_id = client.save_share(pwd_id, stoken, fids, tokens)
-                    client.poll_task(task_id)
-                    self.root.after(0, lambda: self.log("转存完成"))
-                    time.sleep(1)
+                    self.root.after(0, lambda: self.log(f"等待转存任务完成 (task_id: {task_id[:8]}...)"))
+                    task_result = client.poll_task(task_id)
+                    self.root.after(0, lambda: self.log("转存完成，正在获取文件信息..."))
 
-                    self.root.after(0, lambda: self.log("扫描网盘..."))
-                    my_files = client.list_files("0")
-                    name_map = {f["file_name"]: f for f in my_files if not f["is_dir"]}
-                    real_files = [name_map[f["file_name"]] for f in fid_list if f["file_name"] in name_map]
-                    self.root.after(0, lambda: self.log(f"匹配 {len(real_files)}/{len(fid_list)}", "ok"))
+                    # 尝试从任务结果获取文件信息
+                    real_files = self._extract_files_from_task(task_result, fid_list)
+
+                    if not real_files:
+                        # 如果无法从任务结果获取，再扫描网盘
+                        self.root.after(0, lambda: self.log("任务结果无文件信息，扫描网盘中..."))
+                        try:
+                            my_files = client.list_files("0", log_func=lambda msg: self.root.after(0, lambda: self.log(msg)))
+                            name_map = {f["file_name"]: f for f in my_files if not f["is_dir"]}
+                            real_files = [name_map[f["file_name"]] for f in fid_list if f["file_name"] in name_map]
+                            self.root.after(0, lambda: self.log(f"扫描完成，匹配 {len(real_files)}/{len(fid_list)}", "ok"))
+                        except Exception as e:
+                            self.root.after(0, lambda: self.log(f"扫描网盘失败: {e}", "err"))
+                            real_files = []
+                    else:
+                        self.root.after(0, lambda: self.log(f"从任务结果获取 {len(real_files)} 个文件", "ok"))
+
+                    if not real_files:
+                        self.root.after(0, lambda: self.log("未找到可下载的文件", "err"))
+                        return
+
                     self.root.after(0, lambda: self._populate_tree(real_files))
 
                     for i, finfo in enumerate(real_files, 1):
@@ -1216,12 +1293,15 @@ class QuarkGUI:
 
     def _download_with_progress(self, downloader: MultiThreadDownloader,
                                 client: QuarkClient, fid: str, filename: str, size: int) -> None:
+        self.root.after(0, lambda: self.log(f"  获取下载链接..."))
         url = client.get_download_url(fid)
+        self.root.after(0, lambda: self.log(f"  下载链接获取完成"))
         dest = downloader.output_dir / filename
         chunks_dir = dest.with_name(dest.name + ".chunks")
         downloader.output_dir.mkdir(parents=True, exist_ok=True)
 
         if dest.exists() and size and dest.stat().st_size == size:
+            self.root.after(0, lambda: self.log(f"  文件已存在，跳过"))
             return
 
         if size and size >= downloader.range_threshold:
