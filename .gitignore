@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 运行时生成
+.quarkdl_cookies.json
+.quarkdl_login_cookie.tmp
+_quarkdl_manage_tmp.py
+_quarkdl_login_tmp.py
+
+# 下载目录
+downloads/
+*.part
+*.chunks/
+
+# 系统
+Thumbs.db
+Desktop.ini
