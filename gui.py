@@ -4,9 +4,7 @@ GUI 界面
 
 from __future__ import annotations
 
-import concurrent.futures
 import json
-import shutil
 import threading
 import time
 import tkinter as tk
@@ -16,16 +14,12 @@ from pathlib import Path
 import customtkinter as ctk
 
 from client import QuarkClient
-from downloader import MultiThreadDownloader, _download_chunk
+from downloader import MultiThreadDownloader
 from scripts import open_login_window, open_manage_window
 from utils import (
     _exe_dir, _resource_dir, COOKIE_FILE, FONT, FONT_MONO,
-    human_bytes, plan_ranges, parse_share_url
+    human_bytes, parse_share_url
 )
-
-
-class Cancelled(Exception):
-    pass
 
 
 class QuarkGUI:
@@ -600,7 +594,7 @@ class QuarkGUI:
                             self._download_with_progress(downloader, client, fid, name, size)
                             self.root.after(0, lambda n=name: self.log(f"  ✓ {n}", "ok"))
                             self.root.after(0, self._update_progress, 100, "✓ 完成")
-                        except Cancelled:
+                        except InterruptedError:
                             break
                         except Exception as e:
                             self.root.after(0, lambda n=name, err=str(e): self.log(f"  ✗ {n}: {err}", "err"))
@@ -652,7 +646,7 @@ class QuarkGUI:
                             self.root.after(0, self._update_status, fid, "✓ 完成", "ok")
                             self.root.after(0, self._update_progress, 100, "✓ 完成")
                             self.root.after(0, lambda n=name: self.log(f"  ✓ {n}", "ok"))
-                        except Cancelled:
+                        except InterruptedError:
                             self.root.after(0, self._update_status, fid, "已取消", "warn")
                             break
                         except Exception as e:
@@ -661,7 +655,7 @@ class QuarkGUI:
 
                 if not self.cancel_event.is_set():
                     self.root.after(0, lambda: self.log("下载任务结束", "ok"))
-            except Cancelled:
+            except InterruptedError:
                 self.root.after(0, lambda: self.log("已取消", "warn"))
             except Exception as e:
                 self.root.after(0, lambda: self.log(f"失败: {e}", "err"))
@@ -676,72 +670,32 @@ class QuarkGUI:
         self.root.after(0, lambda: self.log(f"  获取下载链接..."))
         url = client.get_download_url(fid)
         self.root.after(0, lambda: self.log(f"  下载链接获取完成"))
-        dest = downloader.output_dir / filename
-        chunks_dir = dest.with_name(dest.name + ".chunks")
-        downloader.output_dir.mkdir(parents=True, exist_ok=True)
 
-        if dest.exists() and size and dest.stat().st_size == size:
-            self.root.after(0, lambda: self.log(f"  文件已存在，跳过"))
-            return
+        # 进度追踪状态
+        last_print = time.time()
+        last_bytes = 0
+        smooth_speed = 0.0
 
-        if size and size >= downloader.range_threshold:
-            part_file = dest.with_name(dest.name + ".part")
-            if part_file.exists():
-                part_file.unlink(missing_ok=True)
-            chunks_dir.mkdir(parents=True, exist_ok=True)
+        def on_progress(done_bytes: int, total: int) -> None:
+            nonlocal last_print, last_bytes, smooth_speed
+            now = time.time()
+            elapsed = now - last_print
+            if elapsed >= 1.0 or done_bytes >= total:
+                instant = (done_bytes - last_bytes) / elapsed if elapsed > 0 else 0
+                smooth_speed = instant if smooth_speed == 0 else smooth_speed * 0.6 + instant * 0.4
+                pct = done_bytes * 100 // total if total else 0
+                self.root.after(0, self._update_status, fid, f"{pct}% | {human_bytes(smooth_speed)}/s")
+                self.root.after(0, self._update_progress, pct, f"{pct}% | {human_bytes(smooth_speed)}/s")
+                last_print = now
+                last_bytes = done_bytes
 
-            ranges = plan_ranges(size, downloader.chunk_size)
-            total = len(ranges)
-            pending = []
-            done_bytes = 0
-            for idx, (s, e) in enumerate(ranges):
-                cp = chunks_dir / f"{idx:06d}.part"
-                if cp.exists() and cp.stat().st_size == e - s + 1:
-                    done_bytes += e - s + 1
-                else:
-                    pending.append((idx, s, e, cp))
+        def is_cancelled() -> bool:
+            return self.cancel_event.is_set()
 
-            done_count = total - len(pending)
-            last_print = time.time()
-            last_bytes = done_bytes
-            smooth_speed = 0.0
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(downloader.workers, max(1, len(pending)))) as executor:
-                futures = {
-                    executor.submit(_download_chunk, client.session, url, s, e, cp): (idx, s, e)
-                    for idx, s, e, cp in pending
-                }
-                try:
-                    for future in concurrent.futures.as_completed(futures):
-                        if self.cancel_event.is_set():
-                            for f in futures:
-                                f.cancel()
-                            raise Cancelled()
-                        idx, s, e = futures[future]
-                        got = future.result()
-                        done_bytes += got
-                        done_count += 1
-
-                        now = time.time()
-                        elapsed = now - last_print
-                        if elapsed >= 1.0 or done_count == total:
-                            instant = (done_bytes - last_bytes) / elapsed if elapsed > 0 else 0
-                            smooth_speed = instant if smooth_speed == 0 else smooth_speed * 0.6 + instant * 0.4
-                            pct = done_bytes * 100 // size if size else 0
-                            self.root.after(0, self._update_status, fid, f"{pct}% | {human_bytes(smooth_speed)}/s")
-                            self.root.after(0, self._update_progress, pct, f"{pct}% | {human_bytes(smooth_speed)}/s")
-                            last_print = now
-                            last_bytes = done_bytes
-                except Cancelled:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    raise
-
-            downloader._assemble(chunks_dir, part_file, ranges)
-            part_file.rename(dest)
-            shutil.rmtree(chunks_dir, ignore_errors=True)
-        else:
-            part = dest.with_name(dest.name + ".part")
-            downloader._download_stream(url, dest, part, size)
+        downloader.download_file(
+            fid, filename=filename, size=size, url=url,
+            on_progress=on_progress, is_cancelled=is_cancelled,
+        )
 
     def _update_status(self, fid: str, status: str, tag: str = "normal") -> None:
         try:

@@ -8,12 +8,13 @@ import concurrent.futures
 import shutil
 import time
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlparse
 
 import requests
 
 from client import QuarkClient
-from utils import PC_UA, BASE_URL, plan_ranges
+from utils import PC_UA, BASE_URL, total_chunks, chunk_range
 
 
 def _cdn_headers() -> dict[str, str]:
@@ -48,10 +49,19 @@ class MultiThreadDownloader:
         self.chunk_size = chunk_size
         self.range_threshold = range_threshold
 
-    def download_file(self, fid: str, filename: str | None = None, size: int | None = None) -> Path:
-        """下载单个文件"""
-        info = self.client.get_download_url(fid)
-        url = info if isinstance(info, str) else info
+    def download_file(
+        self,
+        fid: str,
+        filename: str | None = None,
+        size: int | None = None,
+        url: str | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> Path:
+        """下载单个文件。url 可由调用方预取以避免重复请求。"""
+        if not url:
+            info = self.client.get_download_url(fid)
+            url = info if isinstance(info, str) else info
 
         if not filename:
             resp = self.client.session.post(
@@ -86,7 +96,7 @@ class MultiThreadDownloader:
                 size = 0
 
         if size and size >= self.range_threshold:
-            self._download_ranged(url, dest, part, chunks_dir, size)
+            self._download_ranged(url, dest, part, chunks_dir, size, on_progress, is_cancelled)
         else:
             self._download_stream(url, dest, part, size)
 
@@ -114,7 +124,7 @@ class MultiThreadDownloader:
 
             written = existing
             with part.open(mode) as f:
-                for block in resp.iter_content(chunk_size=256 * 1024):
+                for block in resp.iter_content(chunk_size=1024 * 1024):
                     if not block:
                         continue
                     f.write(block)
@@ -124,51 +134,76 @@ class MultiThreadDownloader:
             raise RuntimeError(f"大小不匹配: 期望 {expected_size}, 实际 {part.stat().st_size}")
         part.rename(dest)
 
-    def _download_ranged(self, url: str, dest: Path, part: Path, chunks_dir: Path, expected_size: int) -> None:
-        """分片下载"""
+    def _download_ranged(
+        self, url: str, dest: Path, part: Path, chunks_dir: Path,
+        expected_size: int,
+        on_progress: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        """分片下载（基于计数器，不生成全量 ranges 列表）"""
         if part.exists():
             part.unlink()
         chunks_dir.mkdir(parents=True, exist_ok=True)
 
-        ranges = plan_ranges(expected_size, self.chunk_size)
+        n_chunks = total_chunks(expected_size, self.chunk_size)
         pending = []
-        for idx, (start, end) in enumerate(ranges):
+        for idx in range(n_chunks):
+            start, end = chunk_range(idx, self.chunk_size, expected_size)
             chunk_path = chunks_dir / f"{idx:06d}.part"
             chunk_len = end - start + 1
             if not (chunk_path.exists() and chunk_path.stat().st_size == chunk_len):
                 pending.append((idx, start, end, chunk_path))
 
         if not pending:
-            self._assemble(chunks_dir, part, ranges)
+            self._assemble(chunks_dir, part, n_chunks, expected_size)
             part.rename(dest)
             shutil.rmtree(chunks_dir, ignore_errors=True)
             return
+
+        # 计算已完成字节数（用于进度回调）
+        done_bytes = 0
+        for idx in range(n_chunks):
+            cp = chunks_dir / f"{idx:06d}.part"
+            if cp.exists():
+                done_bytes += cp.stat().st_size
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.workers, len(pending))) as executor:
             futures = {
                 executor.submit(_download_chunk, self.client.session, url, start, end, chunk_path): (idx, start, end)
                 for idx, start, end, chunk_path in pending
             }
-            for future in concurrent.futures.as_completed(futures):
-                idx, start, end = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    for f in futures:
-                        f.cancel()
-                    raise RuntimeError(f"分片 {idx} 失败: {e}") from e
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    if is_cancelled and is_cancelled():
+                        for f in futures:
+                            f.cancel()
+                        raise InterruptedError("下载已取消")
+                    idx, start, end = futures[future]
+                    try:
+                        got = future.result()
+                        done_bytes += got
+                        if on_progress:
+                            on_progress(done_bytes, expected_size)
+                    except Exception as e:
+                        for f in futures:
+                            f.cancel()
+                        raise RuntimeError(f"分片 {idx} 失败: {e}") from e
+            except InterruptedError:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
 
-        self._assemble(chunks_dir, part, ranges)
+        self._assemble(chunks_dir, part, n_chunks, expected_size)
         if part.stat().st_size != expected_size:
             raise RuntimeError(f"大小不匹配: {expected_size} vs {part.stat().st_size}")
         part.rename(dest)
         shutil.rmtree(chunks_dir, ignore_errors=True)
 
-    def _assemble(self, chunks_dir: Path, part: Path, ranges: list[tuple[int, int]]) -> None:
-        """合并分片"""
+    def _assemble(self, chunks_dir: Path, part: Path, n_chunks: int, size: int) -> None:
+        """合并分片（基于计数器，不依赖 ranges 列表）"""
         tmp = part.with_suffix(".assembling")
         with tmp.open("wb") as out:
-            for idx, (start, end) in enumerate(ranges):
+            for idx in range(n_chunks):
+                start, end = chunk_range(idx, self.chunk_size, size)
                 chunk_path = chunks_dir / f"{idx:06d}.part"
                 expected = end - start + 1
                 if not chunk_path.exists() or chunk_path.stat().st_size != expected:
@@ -186,7 +221,7 @@ def _download_chunk(
     chunk_path: Path,
     retries: int = 5,
 ) -> int:
-    """下载单个分片"""
+    """下载单个分片（session 复用 + 1MB 读缓冲）"""
     expected = end - start + 1
     if chunk_path.exists() and chunk_path.stat().st_size == expected:
         return expected
@@ -195,10 +230,10 @@ def _download_chunk(
     headers = _cdn_headers()
     headers["Range"] = f"bytes={start}-{end}"
 
+    session = _copy_session(source_session)
     last_error = "unknown"
     for attempt in range(1, retries + 1):
         try:
-            session = _copy_session(source_session)
             with session.get(url, headers=headers, stream=True, timeout=(15, 60)) as resp:
                 if resp.status_code != 206:
                     last_error = f"HTTP {resp.status_code}"
@@ -206,7 +241,7 @@ def _download_chunk(
                     continue
                 written = 0
                 with tmp.open("wb") as f:
-                    for block in resp.iter_content(chunk_size=256 * 1024):
+                    for block in resp.iter_content(chunk_size=1024 * 1024):
                         if not block:
                             continue
                         f.write(block)
@@ -221,6 +256,8 @@ def _download_chunk(
         except Exception as exc:
             last_error = str(exc)
             tmp.unlink(missing_ok=True)
+            # 连接异常时重建 session
+            session = _copy_session(source_session)
             time.sleep(min(2 ** attempt, 12))
 
     raise RuntimeError(f"分片 bytes={start}-{end} 失败 ({retries} 次重试): {last_error}")

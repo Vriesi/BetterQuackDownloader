@@ -27,7 +27,7 @@ jobs:
 
     - name: Build exe
       run: |
-        python -m PyInstaller -F -w -i icon.ico --add-data "icon.ico;." --name "QuarkDownloader" main.py
+        python -m PyInstaller --clean QuarkDownloader.spec
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4

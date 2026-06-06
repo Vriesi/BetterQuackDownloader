@@ -33,15 +33,21 @@ def human_bytes(n: int | float) -> str:
     return f"{n:.1f} PB"
 
 
+def total_chunks(size: int, chunk_size: int) -> int:
+    """计算总分片数"""
+    return (size + chunk_size - 1) // chunk_size
+
+
+def chunk_range(idx: int, chunk_size: int, size: int) -> tuple[int, int]:
+    """根据分片索引计算 (start, end) 字节范围，不分配任何列表"""
+    start = idx * chunk_size
+    end = min(start + chunk_size - 1, size - 1)
+    return start, end
+
+
 def plan_ranges(size: int, chunk_size: int) -> list[tuple[int, int]]:
-    """规划分片下载的范围"""
-    ranges = []
-    start = 0
-    while start < size:
-        end = min(start + chunk_size - 1, size - 1)
-        ranges.append((start, end))
-        start = end + 1
-    return ranges
+    """规划分片下载的范围（兼容旧调用，新代码请用 total_chunks + chunk_range）"""
+    return [chunk_range(i, chunk_size, size) for i in range(total_chunks(size, chunk_size))]
 
 
 def parse_share_url(url: str) -> tuple[str, str]:
