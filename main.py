@@ -16,7 +16,7 @@ from downloader import MultiThreadDownloader
 from gui import QuarkGUI
 from utils import _exe_dir, human_bytes, parse_share_url
 
-# DPI + 任务栏图标
+# ─── DPI + 任务栏图标 ───
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -28,13 +28,13 @@ try:
 except Exception:
     pass
 
-# 主题
+# ─── 主题 ───
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 
-# CLI 入口（保留命令行功能）
+# ─── CLI 入口 ───
 
 
 def cmd_download(args: argparse.Namespace) -> None:
@@ -102,7 +102,7 @@ def cmd_list(args: argparse.Namespace) -> None:
         print(f"  {p} {f['file_name']}  {s}  [fid={f['fid']}]")
 
 
-# 入口
+# ─── 入口 ───
 
 
 def main():
