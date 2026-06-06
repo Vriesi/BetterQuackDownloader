@@ -28,8 +28,8 @@ class QuarkGUI:
     def __init__(self, root: ctk.CTk) -> None:
         self.root = root
         self.root.title("夸克网盘多线程下载器")
-        self.root.geometry("860x860")
-        self.root.minsize(700, 600)
+        self.root.geometry("1280x720")
+        self.root.minsize(960, 540)
         self.root.configure(fg_color="#f0f2f5")
         self._set_window_icon()
         self._build_colors()
@@ -65,7 +65,14 @@ class QuarkGUI:
         except Exception:
             pass
 
-    # ─── helpers ───
+    # ─── 辅助方法 ───
+
+    def _font(self, size: int, bold: bool = False) -> ctk.CTkFont:
+        """统一字体：普通文本用 normal，标题用 bold"""
+        return ctk.CTkFont(family=FONT, size=size, weight="bold" if bold else "normal")
+
+    def _font_mono(self, size: int) -> ctk.CTkFont:
+        return ctk.CTkFont(family=FONT_MONO, size=size, weight="normal")
 
     def _card(self, parent, **pack_kw) -> ctk.CTkFrame:
         card = ctk.CTkFrame(parent, fg_color=self.c["card"],
@@ -76,44 +83,60 @@ class QuarkGUI:
         card.pack(**defaults)
         return card
 
-    def _section(self, parent: ctk.CTkFrame, title: str) -> ctk.CTkFrame:
-        card = self._card(parent)
+    def _section(self, parent: ctk.CTkFrame, title: str, **pack_kw) -> ctk.CTkFrame:
+        defaults = {"fill": "x", "padx": 12, "pady": 5}
+        defaults.update(pack_kw)
+        card = self._card(parent, **defaults)
         ctk.CTkLabel(card, text=title,
-                     font=ctk.CTkFont(family=FONT, size=14, weight="bold"),
+                     font=self._font(14, bold=True),
                      text_color=self.c["text"],
                      anchor="w").pack(anchor="w", padx=18, pady=(14, 2))
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=18, pady=(6, 14))
+        body.pack(fill="both", expand=True, padx=18, pady=(6, 14))
         return body
 
-    # ─── UI construction ───
+    # ─── 界面构建 ───
 
     def _build_ui(self) -> None:
         c = self.c
 
-        # ── Header bar ──
+        # ── 顶部栏 ──
         bar = ctk.CTkFrame(self.root, fg_color=c["card"], corner_radius=0,
                            border_color=c["border"], border_width=1)
         bar.pack(fill="x")
         inner = ctk.CTkFrame(bar, fg_color="transparent")
-        inner.pack(fill="x", padx=22, pady=(16, 14))
+        inner.pack(fill="x", padx=22, pady=(12, 10))
         ctk.CTkLabel(inner, text="夸克网盘下载器",
-                     font=ctk.CTkFont(family=FONT, size=16, weight="bold"),
+                     font=self._font(16, bold=True),
                      text_color=c["text"]).pack(side="left")
         ctk.CTkLabel(inner, text="BetterQuackDownloader",
-                     font=ctk.CTkFont(family=FONT, size=10),
+                     font=self._font(10),
                      text_color=c["text_dim"]).pack(side="right")
 
-        # ── 1. Cookie ──
-        body1 = self._section(self.root, "🔑  Cookie")
+        # ── 左右分栏 ──
+        pane = ctk.CTkFrame(self.root, fg_color="transparent")
+        pane.pack(fill="both", expand=True, padx=0, pady=0)
+        pane.columnconfigure(0, weight=1, uniform="half")
+        pane.columnconfigure(1, weight=1, uniform="half")
+        pane.rowconfigure(0, weight=1)
 
-        btn_row = ctk.CTkFrame(body1, fg_color="transparent")
+        left = ctk.CTkFrame(pane, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(12, 3), pady=10)
+        right = ctk.CTkFrame(pane, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew", padx=(3, 12), pady=10)
+
+        # ── 左侧：Cookie + 参数 + 操作 ──
+
+        # ── Cookie ──
+        body_cookie = self._section(left, "🔑  Cookie")
+
+        btn_row = ctk.CTkFrame(body_cookie, fg_color="transparent")
         btn_row.pack(fill="x", pady=(0, 8))
         self.btn_login = ctk.CTkButton(
             btn_row, text="🌐 获取 Cookie",
             command=self._open_login_browser,
             fg_color=c["accent"], hover_color=c["accent_hover"],
-            text_color="white", font=ctk.CTkFont(family=FONT, size=11),
+            text_color="white", font=self._font(11),
             corner_radius=8, width=40, height=32,
         )
         self.btn_login.pack(side="right")
@@ -121,25 +144,25 @@ class QuarkGUI:
             btn_row, text="👤 管理账号",
             command=self._open_account_manager,
             fg_color=c["card"], hover_color=c["input_bg"],
-            text_color=c["text"], font=ctk.CTkFont(family=FONT, size=11),
+            text_color=c["text"], font=self._font(11),
             corner_radius=8, width=40, height=32,
             border_color=c["border"], border_width=1,
         )
         self.btn_manage.pack(side="right", padx=(0, 8))
 
         self.ent_cookie = ctk.CTkTextbox(
-            body1, height=68,
+            body_cookie, height=68,
             fg_color=c["input_bg"], text_color=c["text"],
             border_color=c["border"], border_width=1,
-            corner_radius=6, font=ctk.CTkFont(family=FONT_MONO, size=10),
+            corner_radius=6, font=self._font_mono(10),
             wrap="word", activate_scrollbars=False,
         )
         self.ent_cookie.pack(fill="x")
 
-        # ── 2. 参数 / 日志  Tabview ──
-        card_tab = self._card(self.root, fill="both", expand=True)
+        # ── 参数 / 日志 Tabview ──
+        card_tab = self._card(left, fill="both", expand=True)
         ctk.CTkLabel(card_tab, text="⬇  下载参数",
-                     font=ctk.CTkFont(family=FONT, size=14, weight="bold"),
+                     font=self._font(14, bold=True),
                      text_color=c["text"], anchor="w").pack(anchor="w", padx=18, pady=(14, 2))
         self.tabview = ctk.CTkTabview(card_tab, fg_color="transparent",
                                       segmented_button_fg_color=c["input_bg"],
@@ -150,38 +173,58 @@ class QuarkGUI:
                                       corner_radius=8)
         self.tabview.pack(fill="both", expand=True, padx=14, pady=(0, 12))
         self.tabview._segmented_button.configure(
-            font=ctk.CTkFont(family=FONT, size=13, weight="bold"),
+            font=self._font(13, bold=True),
             corner_radius=20,
         )
 
         tab_params = self.tabview.add("  参数  ")
         tab_log = self.tabview.add("  日志  ")
 
+        # 固定内容区域大小，切换 tab 不会跳动
+        self.tabview.update_idletasks()
+        self.tabview.grid_propagate(False)
+        for child in self.tabview.winfo_children():
+            if child.winfo_class() == "Frame" and child.grid_info().get("row") == 3:
+                child.grid_propagate(False)
+                child.configure(width=child.winfo_width(), height=child.winfo_height())
+                child.grid_rowconfigure(0, weight=1)
+                child.grid_columnconfigure(0, weight=1)
+                break
+
+        tab_params.grid_rowconfigure(0, weight=1)
+        tab_params.grid_columnconfigure(0, weight=1)
+        tab_log.grid_rowconfigure(0, weight=1)
+        tab_log.grid_columnconfigure(0, weight=1)
+
         # ── 参数 tab ──
         body2 = ctk.CTkFrame(tab_params, fg_color="transparent")
-        body2.pack(fill="both", expand=True, padx=4, pady=(8, 4))
+        body2.grid(row=0, column=0, sticky="nsew", padx=4, pady=(8, 4))
 
+        ctk.CTkLabel(body2, text="分享链接 / 文件 FID    二选一",
+                     font=self._font(11),
+                     text_color=c["text_dim"],
+                     anchor="w").pack(anchor="w", pady=(0, 2))
         ctk.CTkLabel(body2, text="分享链接",
-                     font=ctk.CTkFont(family=FONT, size=10),
+                     font=self._font(10),
                      text_color=c["text_secondary"],
                      anchor="w").pack(anchor="w", pady=(0, 2))
         self.ent_url = ctk.CTkEntry(
             body2, height=36,
             fg_color=c["input_bg"], text_color=c["text"],
             border_color=c["border"], corner_radius=6,
-            font=ctk.CTkFont(family=FONT_MONO, size=11),
+            font=self._font_mono(11),
         )
         self.ent_url.pack(fill="x", pady=(0, 10))
 
-        ctk.CTkLabel(body2, text="文件 FID（可选）",
-                     font=ctk.CTkFont(family=FONT, size=10),
+        ctk.CTkLabel(body2, text="文件 FID",
+                     font=self._font(10),
                      text_color=c["text_secondary"],
                      anchor="w").pack(anchor="w", pady=(0, 2))
         self.ent_fid = ctk.CTkEntry(
             body2, height=36,
             fg_color=c["input_bg"], text_color=c["text"],
             border_color=c["border"], corner_radius=6,
-            font=ctk.CTkFont(family=FONT_MONO, size=11),
+            font=self._font_mono(11),
         )
         self.ent_fid.pack(fill="x", pady=(0, 12))
 
@@ -189,14 +232,14 @@ class QuarkGUI:
         row1 = ctk.CTkFrame(body2, fg_color="transparent")
         row1.pack(fill="x", pady=(0, 8))
         ctk.CTkLabel(row1, text="线程数",
-                     font=ctk.CTkFont(family=FONT, size=12),
+                     font=self._font(12),
                      text_color=c["text_secondary"]).pack(side="left")
         self.var_workers = tk.IntVar(value=32)
         self.ent_workers = ctk.CTkEntry(row1, width=56, height=28,
                                         text_color=c["text"],
                                         fg_color=c["input_bg"],
                                         border_color=c["border"], corner_radius=6,
-                                        font=ctk.CTkFont(family=FONT_MONO, size=12),
+                                        font=self._font_mono(12),
                                         justify="center")
         self.ent_workers.pack(side="right", padx=(0, 4))
         self.ent_workers.insert(0, "32")
@@ -214,14 +257,14 @@ class QuarkGUI:
         row2 = ctk.CTkFrame(body2, fg_color="transparent")
         row2.pack(fill="x", pady=(0, 8))
         ctk.CTkLabel(row2, text="分片 (MB)",
-                     font=ctk.CTkFont(family=FONT, size=12),
+                     font=self._font(12),
                      text_color=c["text_secondary"]).pack(side="left")
         self.var_chunk = tk.IntVar(value=1)
         self.ent_chunk = ctk.CTkEntry(row2, width=56, height=28,
                                       text_color=c["text"],
                                       fg_color=c["input_bg"],
                                       border_color=c["border"], corner_radius=6,
-                                      font=ctk.CTkFont(family=FONT_MONO, size=12),
+                                      font=self._font_mono(12),
                                       justify="center")
         self.ent_chunk.pack(side="right", padx=(0, 4))
         self.ent_chunk.insert(0, "1")
@@ -238,21 +281,21 @@ class QuarkGUI:
         # ── 输出目录 ──
         row3 = ctk.CTkFrame(body2, fg_color="transparent")
         row3.pack(fill="x")
-        ctk.CTkLabel(row3, text="输出目录",
-                     font=ctk.CTkFont(family=FONT, size=12),
+        ctk.CTkLabel(row3, text="下载目录",
+                     font=self._font(12),
                      text_color=c["text_secondary"]).pack(side="left")
         self.var_output = tk.StringVar(value=str(_exe_dir() / "downloads"))
         ctk.CTkEntry(row3, textvariable=self.var_output,
                      height=32,
                      fg_color=c["input_bg"], text_color=c["text"],
                      border_color=c["border"], corner_radius=6,
-                     font=ctk.CTkFont(family=FONT_MONO, size=10),
+                     font=self._font_mono(10),
                      ).pack(side="left", fill="x", expand=True, padx=(6, 6))
         ctk.CTkButton(row3, text="...", width=36, height=32,
                       command=self._browse_output,
                       fg_color=c["input_bg"], hover_color=c["border"],
                       text_color=c["text"], corner_radius=6,
-                      font=ctk.CTkFont(family=FONT, size=10, weight="bold"),
+                      font=self._font(10, bold=True),
                       border_color=c["border"], border_width=1,
                       ).pack(side="left")
 
@@ -261,52 +304,60 @@ class QuarkGUI:
             tab_log,
             fg_color=c["card"], text_color=c["text"],
             border_color=c["border"], border_width=1,
-            corner_radius=6, font=ctk.CTkFont(family=FONT_MONO, size=10),
+            corner_radius=6, font=self._font_mono(10),
             wrap="word", activate_scrollbars=False,
         )
-        self.txt_log.pack(fill="both", expand=True, padx=4, pady=(8, 4))
+        self.txt_log.grid(row=0, column=0, sticky="nsew", padx=4, pady=(8, 4))
         self.txt_log.configure(state="disabled")
 
-        # ── 3. Actions ──
-        frm_actions = ctk.CTkFrame(self.root, fg_color="transparent")
-        frm_actions.pack(fill="x", padx=12, pady=(10, 5))
-        self.btn_parse = ctk.CTkButton(
-            frm_actions, text="🔍 解析链接",
-            command=self._parse_link,
-            fg_color=c["card"], hover_color=c["input_bg"],
-            text_color=c["text"], corner_radius=8,
-            font=ctk.CTkFont(family=FONT, size=11),
-            border_color=c["border"], border_width=1,
-            width=120, height=36,
-        )
-        self.btn_parse.pack(side="left", padx=(0, 10))
-        self.btn_download = ctk.CTkButton(
-            frm_actions, text="⬇ 开始下载",
-            command=self._start_download,
-            fg_color=c["accent"], hover_color=c["accent_hover"],
-            text_color="white", corner_radius=8,
-            font=ctk.CTkFont(family=FONT, size=11, weight="bold"),
-            width=130, height=36,
-        )
-        self.btn_download.pack(side="left", padx=(0, 10))
+        # ── 右侧：文件列表 + 操作按钮 + 进度 ──
+
+        card_right = self._card(right, fill="both", expand=True)
+        header_right = ctk.CTkFrame(card_right, fg_color="transparent")
+        header_right.pack(fill="x", padx=18, pady=(14, 2))
+        ctk.CTkLabel(header_right, text="📂  文件列表",
+                     font=self._font(14, bold=True),
+                     text_color=c["text"], anchor="w").pack(side="left")
+
+        # 操作按钮（右上角）
         self.btn_cancel = ctk.CTkButton(
-            frm_actions, text="✕ 取消",
+            header_right, text="✕ 取消",
             command=self._cancel_download,
             fg_color=c["card"], hover_color="#fee2e2",
             text_color=c["text_dim"], corner_radius=8,
-            font=ctk.CTkFont(family=FONT, size=11),
+            font=self._font(11),
             border_color=c["border"], border_width=1,
-            width=100, height=36,
+            width=40, height=32,
             state="disabled",
         )
-        self.btn_cancel.pack(side="left")
+        self.btn_cancel.pack(side="right")
+        self.btn_download = ctk.CTkButton(
+            header_right, text="⬇ 开始下载",
+            command=self._start_download,
+            fg_color=c["accent"], hover_color=c["accent_hover"],
+            text_color="white", corner_radius=8,
+            font=self._font(11, bold=True),
+            width=40, height=32,
+        )
+        self.btn_download.pack(side="right", padx=(0, 8))
+        self.btn_parse = ctk.CTkButton(
+            header_right, text="🔍 解析链接",
+            command=self._parse_link,
+            fg_color=c["card"], hover_color=c["input_bg"],
+            text_color=c["text"], corner_radius=8,
+            font=self._font(11),
+            border_color=c["border"], border_width=1,
+            width=40, height=32,
+        )
+        self.btn_parse.pack(side="right", padx=(0, 8))
 
-        # ── 4. File list ──
-        body3 = self._section(self.root, "📂  文件列表")
-        frm_tree = tk.Frame(body3, bg=c["border"])
-        frm_tree.pack(fill="x", padx=0, pady=0)
+        body_files = ctk.CTkFrame(card_right, fg_color="transparent")
+        body_files.pack(fill="both", expand=True, padx=18, pady=(6, 14))
+
+        frm_tree = tk.Frame(body_files, bg=c["border"])
+        frm_tree.pack(fill="both", expand=True, padx=0, pady=(0, 8))
         self.tree = ttk.Treeview(frm_tree, columns=("name", "size", "status"),
-                                 show="headings", height=5)
+                                 show="headings")
         self.tree.heading("name", text="文件名")
         self.tree.heading("size", text="大小")
         self.tree.heading("status", text="状态")
@@ -326,26 +377,31 @@ class QuarkGUI:
         style.map("Treeview",
                   background=[("selected", c["accent"])],
                   foreground=[("selected", "white")])
-        self.tree.pack(fill="x")
+        scrollbar = ctk.CTkScrollbar(frm_tree, orientation="vertical",
+                                     command=self.tree.yview,
+                                     fg_color=c["input_bg"],
+                                     button_color=c["border"],
+                                     button_hover_color=c["text_dim"],
+                                     corner_radius=6, width=10)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y", padx=(2, 0))
 
-        # progress bar
-        frm_prog = ctk.CTkFrame(body3, fg_color="transparent")
-        frm_prog.pack(fill="x", padx=16, pady=(0, 14))
-        self.lbl_progress = ctk.CTkLabel(frm_prog, text="",
-                                         font=ctk.CTkFont(family=FONT, size=10),
+        # 进度条（默认隐藏）
+        self.frm_prog = ctk.CTkFrame(body_files, fg_color="transparent")
+        self.lbl_progress = ctk.CTkLabel(self.frm_prog, text="",
+                                         font=self._font(10),
                                          text_color=c["text_secondary"])
         self.lbl_progress.pack(side="left", padx=(0, 10))
         self.bar_progress = ctk.CTkProgressBar(
-            frm_prog, height=10,
+            self.frm_prog, height=10,
             fg_color=c["input_bg"], progress_color=c["accent"],
             corner_radius=5,
         )
         self.bar_progress.pack(side="left", fill="x", expand=True)
         self.bar_progress.set(0)
 
-    # ═══════════════════════════════════════════
-    #  Cookie 持久化
-    # ═══════════════════════════════════════════
+    # ─── Cookie 持久化 ───
 
     def _save_cookie(self, cookie_str: str) -> None:
         try:
@@ -364,9 +420,7 @@ class QuarkGUI:
         except Exception:
             pass
 
-    # ═══════════════════════════════════════════
-    #  获取 Cookie / 管理账号
-    # ═══════════════════════════════════════════
+    # ─── 获取 Cookie / 管理账号 ───
 
     def _open_account_manager(self) -> None:
         """打开网盘管理窗口"""
@@ -394,9 +448,7 @@ class QuarkGUI:
         # pywebview 必须在主线程运行
         self.root.after(100, do_login)
 
-    # ═══════════════════════════════════════════
-    #  日志
-    # ═══════════════════════════════════════════
+    # ─── 日志 ───
 
     def log(self, msg: str, tag: str = "normal") -> None:
         c = self.c
@@ -413,12 +465,10 @@ class QuarkGUI:
             pass
         self.txt_log.configure(state="disabled")
 
-    # ═══════════════════════════════════════════
-    #  辅助
-    # ═══════════════════════════════════════════
+    # ─── 辅助 ───
 
     def _browse_output(self) -> None:
-        d = filedialog.askdirectory(title="选择输出目录")
+        d = filedialog.askdirectory(title="选择下载目录")
         if d:
             self.var_output.set(d)
 
@@ -455,9 +505,7 @@ class QuarkGUI:
         entry.bind("<Return>", apply)
         entry.bind("<FocusOut>", apply)
 
-    # ═══════════════════════════════════════════
-    #  从转存任务结果提取文件信息
-    # ═══════════════════════════════════════════
+    # ─── 从转存任务结果提取文件信息 ───
 
     def _extract_files_from_task(self, task_result: dict, fid_list: list[dict]) -> list[dict]:
         """尝试从转存任务结果中提取文件信息，避免全盘扫描"""
@@ -485,9 +533,7 @@ class QuarkGUI:
         except Exception:
             return []
 
-    # ═══════════════════════════════════════════
-    #  解析分享链接
-    # ═══════════════════════════════════════════
+    # ─── 解析分享链接 ───
 
     def _parse_link(self) -> None:
         cookie = self._get_cookie()
@@ -531,9 +577,7 @@ class QuarkGUI:
             self.tree.insert("", "end", iid=f["fid"],
                              values=(f["file_name"], human_bytes(f["size"]), "等待下载"))
 
-    # ═══════════════════════════════════════════
-    #  下载
-    # ═══════════════════════════════════════════
+    # ─── 下载 ───
 
     def _cancel_download(self) -> None:
         self.cancel_event.set()
@@ -561,7 +605,10 @@ class QuarkGUI:
         self.cancel_event.clear()
         self.downloading = True
         self.btn_download.configure(state="disabled", text="下载中...")
-        self.btn_cancel.configure(state="normal", text="✕ 取消")
+        self.btn_cancel.configure(state="normal", text="✕ 取消",
+                                  fg_color="#fee2e2", text_color="#ef4444",
+                                  hover_color="#fecaca")
+        self.frm_prog.pack(fill="x", padx=4, pady=(0, 4))
         self.bar_progress.set(0)
         self.lbl_progress.configure(text="")
         workers = self._get_int(self.var_workers, 32)
@@ -581,6 +628,16 @@ class QuarkGUI:
                     self.root.after(0, lambda: self.log(f"直接下载 {len(fids)} 个文件"))
                     my_files = client.list_files("0")
                     fid_map = {f["fid"]: f for f in my_files}
+
+                    # 填充文件列表
+                    tree_files = []
+                    for fid in fids:
+                        info = fid_map.get(fid)
+                        if info:
+                            tree_files.append(info)
+                        else:
+                            tree_files.append({"fid": fid, "file_name": fid, "size": 0, "is_dir": False})
+                    self.root.after(0, lambda: self._populate_tree(tree_files))
 
                     for i, fid in enumerate(fids, 1):
                         if self.cancel_event.is_set():
@@ -711,4 +768,6 @@ class QuarkGUI:
     def _finish_download(self) -> None:
         self.downloading = False
         self.btn_download.configure(state="normal", text="⬇ 开始下载")
-        self.btn_cancel.configure(state="disabled", text="✕ 取消")
+        self.btn_cancel.configure(state="disabled", text="✕ 取消",
+                                  fg_color=self.c["card"], text_color=self.c["text_dim"])
+        self.frm_prog.pack_forget()
