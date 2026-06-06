@@ -174,6 +174,7 @@ class MultiThreadDownloader:
 
         # 线程安全的增量进度回调
         lock = threading.Lock()
+        cancel_evt = threading.Event()
 
         def on_bytes_read(n: int) -> None:
             nonlocal done_bytes
@@ -185,23 +186,25 @@ class MultiThreadDownloader:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.workers, len(pending))) as executor:
             futures = {
-                executor.submit(_download_chunk, self.client.session, url, start, end, chunk_path, 5, on_bytes_read): (idx, start, end)
+                executor.submit(_download_chunk, self.client.session, url, start, end,
+                                chunk_path, 5, on_bytes_read, cancel_evt): (idx, start, end)
                 for idx, start, end, chunk_path in pending
             }
             try:
                 for future in concurrent.futures.as_completed(futures):
-                    if is_cancelled and is_cancelled():
-                        for f in futures:
-                            f.cancel()
+                    if (is_cancelled and is_cancelled()) or cancel_evt.is_set():
+                        cancel_evt.set()
+                        executor.shutdown(wait=False, cancel_futures=True)
                         raise InterruptedError("下载已取消")
                     idx, start, end = futures[future]
                     try:
                         future.result()
                     except Exception as e:
-                        for f in futures:
-                            f.cancel()
+                        cancel_evt.set()
+                        executor.shutdown(wait=False, cancel_futures=True)
                         raise RuntimeError(f"分片 {idx} 失败: {e}") from e
             except InterruptedError:
+                cancel_evt.set()
                 executor.shutdown(wait=False, cancel_futures=True)
                 raise
 
@@ -234,13 +237,17 @@ def _download_chunk(
     chunk_path: Path,
     retries: int = 5,
     on_bytes_read: Callable[[int], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> int:
-    """下载单个分片（session 复用 + 增量进度回调）"""
+    """下载单个分片（session 复用 + 增量进度回调 + 即时取消）"""
     expected = end - start + 1
     if chunk_path.exists() and chunk_path.stat().st_size == expected:
         if on_bytes_read:
             on_bytes_read(expected)
         return expected
+
+    if cancel_event and cancel_event.is_set():
+        raise InterruptedError("下载已取消")
 
     tmp = chunk_path.with_suffix(".tmp")
     headers = _cdn_headers()
@@ -248,11 +255,13 @@ def _download_chunk(
 
     session = _copy_session(source_session)
     last_error = "unknown"
-    # 已成功报告给进度回调的字节数（跨重试累计）
     reported = 0
     for attempt in range(1, retries + 1):
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("下载已取消")
         try:
-            with session.get(url, headers=headers, stream=True, timeout=(15, 60)) as resp:
+            # 短连接超时，便于快速响应取消
+            with session.get(url, headers=headers, stream=True, timeout=(3, 30)) as resp:
                 if resp.status_code != 206:
                     last_error = f"HTTP {resp.status_code}"
                     time.sleep(min(2 ** attempt, 12))
@@ -260,6 +269,10 @@ def _download_chunk(
                 written = 0
                 with tmp.open("wb") as f:
                     for block in resp.iter_content(chunk_size=256 * 1024):
+                        if cancel_event and cancel_event.is_set():
+                            resp.close()
+                            tmp.unlink(missing_ok=True)
+                            raise InterruptedError("下载已取消")
                         if not block:
                             continue
                         f.write(block)
@@ -274,6 +287,8 @@ def _download_chunk(
                     continue
                 tmp.replace(chunk_path)
                 return written
+        except InterruptedError:
+            raise
         except Exception as exc:
             last_error = str(exc)
             tmp.unlink(missing_ok=True)
