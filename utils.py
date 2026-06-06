@@ -68,7 +68,7 @@ def parse_share_url(url: str) -> tuple[str, str]:
     return pwd_id, passcode
 
 
-# 常量
+# ─── 常量定义 ───
 COOKIE_FILE = _exe_dir() / ".quarkdl_cookies.json"
 FONT = "Microsoft YaHei UI"
 FONT_MONO = "Cascadia Code"
