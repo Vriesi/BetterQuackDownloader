@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -98,11 +99,13 @@ class MultiThreadDownloader:
         if size and size >= self.range_threshold:
             self._download_ranged(url, dest, part, chunks_dir, size, on_progress, is_cancelled)
         else:
-            self._download_stream(url, dest, part, size)
+            self._download_stream(url, dest, part, size, on_progress)
 
         return dest
 
-    def _download_stream(self, url: str, dest: Path, part: Path, expected_size: int | None) -> None:
+    def _download_stream(self, url: str, dest: Path, part: Path,
+                         expected_size: int | None,
+                         on_progress: Callable[[int, int], None] | None = None) -> None:
         """流式下载"""
         existing = part.stat().st_size if part.exists() else 0
         headers = _cdn_headers()
@@ -124,11 +127,13 @@ class MultiThreadDownloader:
 
             written = existing
             with part.open(mode) as f:
-                for block in resp.iter_content(chunk_size=1024 * 1024):
+                for block in resp.iter_content(chunk_size=256 * 1024):
                     if not block:
                         continue
                     f.write(block)
                     written += len(block)
+                    if on_progress and expected_size:
+                        on_progress(written, expected_size)
 
         if expected_size and part.stat().st_size != expected_size:
             raise RuntimeError(f"大小不匹配: 期望 {expected_size}, 实际 {part.stat().st_size}")
@@ -167,9 +172,20 @@ class MultiThreadDownloader:
             if cp.exists():
                 done_bytes += cp.stat().st_size
 
+        # 线程安全的增量进度回调
+        lock = threading.Lock()
+
+        def on_bytes_read(n: int) -> None:
+            nonlocal done_bytes
+            with lock:
+                done_bytes += n
+                current = done_bytes
+            if on_progress:
+                on_progress(current, expected_size)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.workers, len(pending))) as executor:
             futures = {
-                executor.submit(_download_chunk, self.client.session, url, start, end, chunk_path): (idx, start, end)
+                executor.submit(_download_chunk, self.client.session, url, start, end, chunk_path, 5, on_bytes_read): (idx, start, end)
                 for idx, start, end, chunk_path in pending
             }
             try:
@@ -180,10 +196,7 @@ class MultiThreadDownloader:
                         raise InterruptedError("下载已取消")
                     idx, start, end = futures[future]
                     try:
-                        got = future.result()
-                        done_bytes += got
-                        if on_progress:
-                            on_progress(done_bytes, expected_size)
+                        future.result()
                     except Exception as e:
                         for f in futures:
                             f.cancel()
@@ -220,10 +233,13 @@ def _download_chunk(
     end: int,
     chunk_path: Path,
     retries: int = 5,
+    on_bytes_read: Callable[[int], None] | None = None,
 ) -> int:
-    """下载单个分片（session 复用 + 1MB 读缓冲）"""
+    """下载单个分片（session 复用 + 增量进度回调）"""
     expected = end - start + 1
     if chunk_path.exists() and chunk_path.stat().st_size == expected:
+        if on_bytes_read:
+            on_bytes_read(expected)
         return expected
 
     tmp = chunk_path.with_suffix(".tmp")
@@ -232,6 +248,8 @@ def _download_chunk(
 
     session = _copy_session(source_session)
     last_error = "unknown"
+    # 已成功报告给进度回调的字节数（跨重试累计）
+    reported = 0
     for attempt in range(1, retries + 1):
         try:
             with session.get(url, headers=headers, stream=True, timeout=(15, 60)) as resp:
@@ -241,11 +259,14 @@ def _download_chunk(
                     continue
                 written = 0
                 with tmp.open("wb") as f:
-                    for block in resp.iter_content(chunk_size=1024 * 1024):
+                    for block in resp.iter_content(chunk_size=256 * 1024):
                         if not block:
                             continue
                         f.write(block)
                         written += len(block)
+                        if on_bytes_read and written > reported:
+                            on_bytes_read(written - reported)
+                            reported = written
                 if written != expected:
                     last_error = f"大小不匹配: {written} vs {expected}"
                     tmp.unlink(missing_ok=True)
@@ -256,7 +277,6 @@ def _download_chunk(
         except Exception as exc:
             last_error = str(exc)
             tmp.unlink(missing_ok=True)
-            # 连接异常时重建 session
             session = _copy_session(source_session)
             time.sleep(min(2 ** attempt, 12))
 
