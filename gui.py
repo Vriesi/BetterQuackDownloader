@@ -468,6 +468,7 @@ class QuarkGUI:
             text_color=c["text"], font=self._font(11),
             corner_radius=8, width=40, height=32,
             border_color=c["border"], border_width=1,
+            state="disabled",
         )
         self.btn_manage.pack(side="right", padx=(0, 8))
 
@@ -479,6 +480,7 @@ class QuarkGUI:
             wrap="word", activate_scrollbars=False,
         )
         self.ent_cookie.pack(fill="x")
+        self.ent_cookie.bind("<KeyRelease>", lambda e: self._update_manage_btn())
 
         # ── 参数 / 日志 Tabview ──
         card_tab = self._card(left, fill="both", expand=True)
@@ -753,6 +755,7 @@ class QuarkGUI:
                     self.log("已加载上次保存的 Cookie", "ok")
         except Exception:
             pass
+        self._update_manage_btn()
 
     # ─── 获取 Cookie / 管理账号 ───
 
@@ -796,6 +799,7 @@ class QuarkGUI:
                 self.ent_cookie.insert("0.0", cookie)
                 self._save_cookie(cookie)
                 self.log("Cookie 获取成功！", "ok")
+                self._update_manage_btn()
             else:
                 self.log("未获取到 Cookie，请重试", "warn")
             self.btn_login.configure(state="normal", text="🌐 获取 Cookie")
@@ -826,6 +830,11 @@ class QuarkGUI:
         d = filedialog.askdirectory(title="选择下载目录")
         if d:
             self.var_output.set(d)
+
+    def _update_manage_btn(self) -> None:
+        """Cookie 有内容时启用管理账号按钮"""
+        has_cookie = bool(self._get_cookie())
+        self.btn_manage.configure(state="normal" if has_cookie else "disabled")
 
     def _on_input_change(self) -> None:
         """分享链接与 FID 互斥：一方有内容时禁用另一方"""
