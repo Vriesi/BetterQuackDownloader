@@ -31,6 +31,7 @@ class FileSelectDialog(ctk.CTkToplevel):
         self.geometry("560x500")
         self.minsize(400, 300)
         self.resizable(True, True)
+        self._set_icon()
         self.grab_set()  # 模态
 
         self.result: list[dict] | None = None
@@ -177,6 +178,14 @@ class FileSelectDialog(ctk.CTkToplevel):
         self.grab_release()
         self.destroy()
 
+    def _set_icon(self):
+        ico = _resource_dir() / "icon.ico"
+        if ico.exists():
+            try:
+                self.iconbitmap(str(ico))
+            except Exception:
+                pass
+
     def _on_cancel(self):
         self.result = []
         self.grab_release()
@@ -192,6 +201,7 @@ class CloudFileBrowser(ctk.CTkToplevel):
         self.geometry("560x500")
         self.minsize(400, 300)
         self.resizable(True, True)
+        self._set_icon()
         self.grab_set()
 
         self.client = client
@@ -248,6 +258,14 @@ class CloudFileBrowser(ctk.CTkToplevel):
 
     def _font(self, size: int, bold: bool = False) -> ctk.CTkFont:
         return ctk.CTkFont(family=FONT, size=size, weight="bold" if bold else "normal")
+
+    def _set_icon(self):
+        ico = _resource_dir() / "icon.ico"
+        if ico.exists():
+            try:
+                self.iconbitmap(str(ico))
+            except Exception:
+                pass
 
     def _load_dir(self, pdir_fid: str):
         """加载目录内容"""
@@ -780,6 +798,7 @@ class QuarkGUI:
         dlg = CloudFileBrowser(self.root, client)
         self.root.wait_window(dlg)
         if dlg.result:
+            self.ent_url.delete(0, "end")
             self.ent_fid.configure(state="normal")
             self.ent_fid.delete(0, "end")
             self.ent_fid.insert(0, ",".join(dlg.result))
