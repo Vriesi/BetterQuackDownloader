@@ -22,6 +22,327 @@ from utils import (
 )
 
 
+class FileSelectDialog(ctk.CTkToplevel):
+    """文件选择弹窗：勾选要下载的文件"""
+
+    def __init__(self, parent, file_list: list[dict]):
+        super().__init__(parent)
+        self.title("选择要下载的文件")
+        self.geometry("560x500")
+        self.minsize(400, 300)
+        self.resizable(True, True)
+        self.grab_set()  # 模态
+
+        self.result: list[dict] | None = None
+        self._checks: dict[str, ctk.CTkCheckBox] = {}  # fid -> checkbox
+        self._dir_children: dict[str, list[str]] = {}   # dir_fid -> [child_fid]
+        self._file_map: dict[str, dict] = {}            # fid -> file_info
+        self._size_map: dict[str, int] = {}             # fid -> size
+
+        c = {
+            "card": "#ffffff", "border": "#e5e7eb",
+            "accent": "#6366f1", "text": "#1f2937",
+            "text_secondary": "#6b7280", "input_bg": "#f9fafb",
+        }
+
+        # ── 顶部按钮栏 ──
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=14, pady=(12, 4))
+        ctk.CTkLabel(top, text=f"共 {len(file_list)} 项",
+                     font=ctk.CTkFont(family=FONT, size=11),
+                     text_color=c["text_secondary"]).pack(side="left")
+        ctk.CTkButton(top, text="全不选", width=60, height=28,
+                      fg_color=c["input_bg"], hover_color=c["border"],
+                      text_color=c["text"],
+                      font=ctk.CTkFont(family=FONT, size=10),
+                      command=self._deselect_all).pack(side="right", padx=(4, 0))
+        ctk.CTkButton(top, text="全选", width=60, height=28,
+                      fg_color=c["input_bg"], hover_color=c["border"],
+                      text_color=c["text"],
+                      font=ctk.CTkFont(family=FONT, size=10),
+                      command=self._select_all).pack(side="right")
+
+        # ── 文件列表（可滚动）──
+        self._scroll = ctk.CTkScrollableFrame(self, fg_color=c["card"],
+                                               border_color=c["border"], border_width=1,
+                                               corner_radius=8)
+        self._scroll.pack(fill="both", expand=True, padx=14, pady=6)
+
+        # 构建树结构
+        tree: dict[str, list[dict]] = {}  # parent_path -> [file_info]
+        root_items: list[dict] = []
+        for f in file_list:
+            self._file_map[f["fid"]] = f
+            self._size_map[f["fid"]] = f.get("size", 0)
+            path = f.get("path", f["file_name"])
+            parts = path.strip("/").split("/")
+            if len(parts) <= 1:
+                root_items.append(f)
+            else:
+                parent = "/".join(parts[:-1])
+                tree.setdefault(parent, []).append(f)
+
+        # 递归添加行
+        def add_items(items: list[dict], depth: int):
+            for f in items:
+                fid = f["fid"]
+                path = f.get("path", f["file_name"])
+                indent = "  " * depth
+                prefix = "📁 " if f["is_dir"] else "📄 "
+                name = f['file_name']
+                size_str = human_bytes(f["size"]) if not f["is_dir"] and f.get("size") else ""
+                label = f"{indent}{prefix}{name}    {size_str}" if size_str else f"{indent}{prefix}{name}"
+
+                cb = ctk.CTkCheckBox(
+                    self._scroll, text=label,
+                    font=ctk.CTkFont(family=FONT, size=11),
+                    text_color=c["text"],
+                    fg_color=c["accent"], hover_color=c["accent"],
+                    corner_radius=3, border_width=1,
+                    border_color=c["border"],
+                    checkbox_width=16, checkbox_height=16,
+                    command=lambda fid=fid: self._on_toggle(fid),
+                )
+                cb.select()
+                cb.pack(anchor="w", padx=(12 + depth * 16, 12), pady=1)
+                self._checks[fid] = cb
+
+                # 子文件
+                children = tree.get(path, [])
+                if children:
+                    self._dir_children[fid] = [c["fid"] for c in children]
+                    add_items(children, depth + 1)
+
+        add_items(root_items, 0)
+
+        # ── 底部状态栏 ──
+        bot = ctk.CTkFrame(self, fg_color="transparent")
+        bot.pack(fill="x", padx=14, pady=(4, 12))
+        self._lbl_stats = ctk.CTkLabel(bot, text="",
+                                        font=ctk.CTkFont(family=FONT, size=11),
+                                        text_color=c["text_secondary"])
+        self._lbl_stats.pack(side="left")
+        ctk.CTkButton(bot, text="取消", width=70, height=30,
+                      fg_color=c["input_bg"], hover_color=c["border"],
+                      text_color=c["text"],
+                      font=ctk.CTkFont(family=FONT, size=11),
+                      command=self._on_cancel).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(bot, text="确认下载", width=90, height=30,
+                      fg_color=c["accent"], hover_color="#4f46e5",
+                      text_color="white",
+                      font=ctk.CTkFont(family=FONT, size=11, weight="bold"),
+                      command=self._on_confirm).pack(side="right")
+
+        self._update_stats()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    def _on_toggle(self, fid: str):
+        """文件夹勾选联动子文件"""
+        if fid in self._dir_children:
+            checked = self._checks[fid].get()
+            for child_fid in self._dir_children[fid]:
+                if child_fid in self._checks:
+                    if checked:
+                        self._checks[child_fid].select()
+                    else:
+                        self._checks[child_fid].deselect()
+                # 递归子文件夹
+                if child_fid in self._dir_children:
+                    self._on_toggle(child_fid)
+        self._update_stats()
+
+    def _select_all(self):
+        for cb in self._checks.values():
+            cb.select()
+        self._update_stats()
+
+    def _deselect_all(self):
+        for cb in self._checks.values():
+            cb.deselect()
+        self._update_stats()
+
+    def _update_stats(self):
+        selected = [fid for fid, cb in self._checks.items()
+                    if cb.get() and fid in self._file_map
+                    and not self._file_map[fid]["is_dir"]]
+        total_size = sum(self._size_map.get(fid, 0) for fid in selected)
+        self._lbl_stats.configure(
+            text=f"已选 {len(selected)} 个文件，共 {human_bytes(total_size)}")
+
+    def _on_confirm(self):
+        self.result = [
+            self._file_map[fid] for fid, cb in self._checks.items()
+            if cb.get() and fid in self._file_map and not self._file_map[fid]["is_dir"]
+        ]
+        self.grab_release()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = []
+        self.grab_release()
+        self.destroy()
+
+
+class CloudFileBrowser(ctk.CTkToplevel):
+    """夸克网盘文件浏览器"""
+
+    def __init__(self, parent, client: QuarkClient):
+        super().__init__(parent)
+        self.title("浏览夸克网盘")
+        self.geometry("560x500")
+        self.minsize(400, 300)
+        self.resizable(True, True)
+        self.grab_set()
+
+        self.client = client
+        self.result: list[str] | None = None  # 选中的 fid 列表
+        self._checks: dict[str, ctk.CTkCheckBox] = {}
+        self._file_map: dict[str, dict] = {}
+        self._path_stack: list[tuple[str, str]] = [("0", "根目录")]  # (fid, name)
+
+        c = {
+            "card": "#ffffff", "border": "#e5e7eb",
+            "accent": "#6366f1", "text": "#1f2937",
+            "text_secondary": "#6b7280", "input_bg": "#f9fafb",
+        }
+
+        # ── 顶部路径栏 ──
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=14, pady=(12, 4))
+        self.btn_back = ctk.CTkButton(
+            top, text="← 返回", width=60, height=28,
+            fg_color=c["input_bg"], hover_color=c["border"],
+            text_color=c["text"], font=self._font(10),
+            command=self._go_back,
+        )
+        self.btn_back.pack(side="left")
+        self.lbl_path = ctk.CTkLabel(top, text="根目录",
+                                      font=self._font(11),
+                                      text_color=c["text_secondary"])
+        self.lbl_path.pack(side="left", padx=(10, 0))
+
+        # ── 文件列表 ──
+        self._scroll = ctk.CTkScrollableFrame(self, fg_color=c["card"],
+                                               border_color=c["border"], border_width=1,
+                                               corner_radius=8)
+        self._scroll.pack(fill="both", expand=True, padx=14, pady=6)
+
+        # ── 底部 ──
+        bot = ctk.CTkFrame(self, fg_color="transparent")
+        bot.pack(fill="x", padx=14, pady=(4, 12))
+        self._lbl_stats = ctk.CTkLabel(bot, text="",
+                                        font=self._font(11),
+                                        text_color=c["text_secondary"])
+        self._lbl_stats.pack(side="left")
+        ctk.CTkButton(bot, text="取消", width=70, height=30,
+                      fg_color=c["input_bg"], hover_color=c["border"],
+                      text_color=c["text"], font=self._font(11),
+                      command=self._on_cancel).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(bot, text="确认选择", width=90, height=30,
+                      fg_color=c["accent"], hover_color="#4f46e5",
+                      text_color="white", font=self._font(11, bold=True),
+                      command=self._on_confirm).pack(side="right")
+
+        self._load_dir("0")
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    def _font(self, size: int, bold: bool = False) -> ctk.CTkFont:
+        return ctk.CTkFont(family=FONT, size=size, weight="bold" if bold else "normal")
+
+    def _load_dir(self, pdir_fid: str):
+        """加载目录内容"""
+        # 清空旧内容
+        for w in self._scroll.winfo_children():
+            w.destroy()
+        self._checks.clear()
+        self._file_map.clear()
+
+        c = {
+            "card": "#ffffff", "border": "#e5e7eb",
+            "accent": "#6366f1", "text": "#1f2937",
+            "text_secondary": "#6b7280", "input_bg": "#f9fafb",
+        }
+
+        try:
+            files = self.client.list_files(pdir_fid)
+        except Exception as e:
+            ctk.CTkLabel(self._scroll, text=f"加载失败: {e}",
+                         font=self._font(11), text_color="#ef4444").pack(pady=20)
+            self._update_back_btn()
+            return
+
+        if not files:
+            ctk.CTkLabel(self._scroll, text="（空目录）",
+                         font=self._font(11), text_color=c["text_secondary"]).pack(pady=20)
+            self._update_back_btn()
+            return
+
+        for f in files:
+            fid = f["fid"]
+            self._file_map[fid] = f
+            name = f["file_name"]
+            is_dir = f["is_dir"]
+            prefix = "📁 " if is_dir else "📄 "
+            size_str = "" if is_dir else human_bytes(f.get("size", 0))
+            label = f"{prefix}{name}    {size_str}" if size_str else f"{prefix}{name}"
+
+            if is_dir:
+                # 文件夹：双击进入
+                btn = ctk.CTkButton(
+                    self._scroll, text=label, anchor="w",
+                    fg_color="transparent", hover_color=c["input_bg"],
+                    text_color=c["text"], font=self._font(11),
+                    height=28, corner_radius=4,
+                    command=lambda fid=fid, name=name: self._enter_dir(fid, name),
+                )
+                btn.pack(fill="x", padx=4, pady=1)
+            else:
+                cb = ctk.CTkCheckBox(
+                    self._scroll, text=label,
+                    font=self._font(11), text_color=c["text"],
+                    fg_color=c["accent"], hover_color=c["accent"],
+                    corner_radius=3, border_width=1, border_color=c["border"],
+                    checkbox_width=16, checkbox_height=16,
+                    command=self._update_stats,
+                )
+                cb.pack(anchor="w", padx=8, pady=1)
+                self._checks[fid] = cb
+
+        self._update_back_btn()
+
+    def _enter_dir(self, fid: str, name: str):
+        self._path_stack.append((fid, name))
+        self.lbl_path.configure(text=" > ".join(n for _, n in self._path_stack))
+        self._load_dir(fid)
+
+    def _go_back(self):
+        if len(self._path_stack) <= 1:
+            return
+        self._path_stack.pop()
+        fid = self._path_stack[-1][0]
+        self.lbl_path.configure(text=" > ".join(n for _, n in self._path_stack))
+        self._load_dir(fid)
+
+    def _update_back_btn(self):
+        self.btn_back.configure(state="normal" if len(self._path_stack) > 1 else "disabled")
+
+    def _update_stats(self):
+        selected = [fid for fid, cb in self._checks.items() if cb.get()]
+        total_size = sum(self._file_map[fid].get("size", 0) for fid in selected)
+        self._lbl_stats.configure(
+            text=f"已选 {len(selected)} 个文件，共 {human_bytes(total_size)}")
+
+    def _on_confirm(self):
+        self.result = [fid for fid, cb in self._checks.items() if cb.get()]
+        self.grab_release()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.grab_release()
+        self.destroy()
+
+
 class QuarkGUI:
     """夸克网盘下载器 GUI"""
 
@@ -215,18 +536,31 @@ class QuarkGUI:
             font=self._font_mono(11),
         )
         self.ent_url.pack(fill="x", pady=(0, 10))
+        self.ent_url.bind("<KeyRelease>", lambda e: self._on_input_change())
 
-        ctk.CTkLabel(body2, text="文件 FID",
+        ctk.CTkLabel(body2, text="网盘内文件（FID）",
                      font=self._font(10),
                      text_color=c["text_secondary"],
                      anchor="w").pack(anchor="w", pady=(0, 2))
+        fid_row = ctk.CTkFrame(body2, fg_color="transparent")
+        fid_row.pack(fill="x", pady=(0, 12))
         self.ent_fid = ctk.CTkEntry(
-            body2, height=36,
+            fid_row, height=36,
             fg_color=c["input_bg"], text_color=c["text"],
             border_color=c["border"], corner_radius=6,
             font=self._font_mono(11),
         )
-        self.ent_fid.pack(fill="x", pady=(0, 12))
+        self.ent_fid.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.ent_fid.bind("<KeyRelease>", lambda e: self._on_input_change())
+        self.btn_browse_cloud = ctk.CTkButton(
+            fid_row, text="📂", width=36, height=36,
+            fg_color=c["input_bg"], hover_color=c["border"],
+            text_color=c["text"], corner_radius=6,
+            font=self._font(14),
+            border_color=c["border"], border_width=1,
+            command=self._open_cloud_browser,
+        )
+        self.btn_browse_cloud.pack(side="left")
 
         # ── 线程数 ──
         row1 = ctk.CTkFrame(body2, fg_color="transparent")
@@ -234,7 +568,7 @@ class QuarkGUI:
         ctk.CTkLabel(row1, text="线程数",
                      font=self._font(12),
                      text_color=c["text_secondary"]).pack(side="left")
-        self.var_workers = tk.IntVar(value=32)
+        self.var_workers = tk.IntVar(value=64)
         self.ent_workers = ctk.CTkEntry(row1, width=56, height=28,
                                         text_color=c["text"],
                                         fg_color=c["input_bg"],
@@ -242,7 +576,7 @@ class QuarkGUI:
                                         font=self._font_mono(12),
                                         justify="center")
         self.ent_workers.pack(side="right", padx=(0, 4))
-        self.ent_workers.insert(0, "32")
+        self.ent_workers.insert(0, "64")
         self.sld_workers = ctk.CTkSlider(
             row1, from_=1, to=1024, number_of_steps=1023,
             variable=self.var_workers, height=16,
@@ -428,6 +762,27 @@ class QuarkGUI:
         # pywebview 必须在主线程运行，使用 after 延迟调用
         self.root.after(100, open_manage_window)
 
+    def _open_cloud_browser(self) -> None:
+        """打开云盘文件浏览器"""
+        cookie = self._get_cookie()
+        if not cookie:
+            messagebox.showwarning("提示", "请先获取或输入 Cookie")
+            return
+        client = QuarkClient(cookie)
+        try:
+            client.account_info()
+        except Exception:
+            messagebox.showerror("错误", "Cookie 无效，请重新获取")
+            return
+        dlg = CloudFileBrowser(self.root, client)
+        self.root.wait_window(dlg)
+        if dlg.result:
+            self.ent_fid.configure(state="normal")
+            self.ent_fid.delete(0, "end")
+            self.ent_fid.insert(0, ",".join(dlg.result))
+            self._on_input_change()
+            self.log(f"已从网盘选择 {len(dlg.result)} 个文件", "ok")
+
     def _open_login_browser(self) -> None:
         """打开登录窗口获取 Cookie"""
         self.btn_login.configure(state="disabled", text="登录中...")
@@ -471,6 +826,24 @@ class QuarkGUI:
         d = filedialog.askdirectory(title="选择下载目录")
         if d:
             self.var_output.set(d)
+
+    def _on_input_change(self) -> None:
+        """分享链接与 FID 互斥：一方有内容时禁用另一方"""
+        c = self.c
+        url_has = bool(self.ent_url.get().strip())
+        fid_has = bool(self.ent_fid.get().strip())
+
+        if url_has:
+            self.ent_fid.configure(state="disabled", fg_color=c["border"], text_color=c["text_dim"])
+        else:
+            self.ent_fid.configure(state="normal", fg_color=c["input_bg"], text_color=c["text"])
+
+        if fid_has:
+            self.ent_url.configure(state="disabled", fg_color=c["border"], text_color=c["text_dim"])
+            self.btn_parse.configure(state="disabled")
+        else:
+            self.ent_url.configure(state="normal", fg_color=c["input_bg"], text_color=c["text"])
+            self.btn_parse.configure(state="normal")
 
     def _get_cookie(self) -> str:
         return self.ent_cookie.get("0.0", "end").strip()
@@ -544,6 +917,9 @@ class QuarkGUI:
         if not url:
             messagebox.showwarning("提示", "请输入分享链接")
             return
+        if "quark" not in url.lower():
+            messagebox.showwarning("提示", "请输入合法的夸克网盘分享链接")
+            return
 
         self.btn_parse.configure(state="disabled", text="解析中...")
         self.tree.delete(*self.tree.get_children())
@@ -554,15 +930,25 @@ class QuarkGUI:
                 client = QuarkClient(cookie)
                 pwd_id, passcode = parse_share_url(url)
                 stoken = client.get_stoken(pwd_id, passcode)
-                files = client.list_share_files(pwd_id, stoken)
-                file_list = [f for f in files if not f["is_dir"]]
+                all_files = client.list_share_files(pwd_id, stoken)
+                file_list = [f for f in all_files if not f["is_dir"]]
 
-                self._parsed_files = file_list
                 self._parsed_pwd_id = pwd_id
                 self._parsed_stoken = stoken
 
-                self.root.after(0, lambda: self._populate_tree(file_list))
-                self.root.after(0, lambda: self.log(f"解析完成，共 {len(file_list)} 个文件", "ok"))
+                # 弹出文件选择窗口
+                def show_dialog():
+                    dlg = FileSelectDialog(self.root, all_files)
+                    self.root.wait_window(dlg)
+                    if dlg.result:
+                        self._parsed_files = dlg.result
+                        self._populate_tree(dlg.result)
+                        self.log(f"已选择 {len(dlg.result)} 个文件", "ok")
+                    else:
+                        self._parsed_files = []
+                        self.log("已取消选择", "warn")
+
+                self.root.after(0, show_dialog)
             except Exception as e:
                 self.root.after(0, lambda: self.log(f"解析失败: {e}", "err"))
                 self.root.after(0, lambda: messagebox.showerror("错误", str(e)))
@@ -575,7 +961,7 @@ class QuarkGUI:
         self.tree.delete(*self.tree.get_children())
         for f in file_list:
             self.tree.insert("", "end", iid=f["fid"],
-                             values=(f["file_name"], human_bytes(f["size"]), "等待下载"))
+                             values=(f["file_name"], human_bytes(f["size"]), "等待点击开始下载"))
 
     # ─── 下载 ───
 
@@ -611,7 +997,7 @@ class QuarkGUI:
         self.frm_prog.pack(fill="x", padx=4, pady=(0, 4))
         self.bar_progress.set(0)
         self.lbl_progress.configure(text="")
-        workers = self._get_int(self.var_workers, 32)
+        workers = self._get_int(self.var_workers, 64)
         chunk_mb = self._get_int(self.var_chunk, 1)
         output = self.var_output.get()
 
@@ -626,8 +1012,19 @@ class QuarkGUI:
                 if fid_input:
                     fids = [f.strip() for f in fid_input.split(",") if f.strip()]
                     self.root.after(0, lambda: self.log(f"直接下载 {len(fids)} 个文件"))
-                    my_files = client.list_files("0")
-                    fid_map = {f["fid"]: f for f in my_files}
+
+                    # 递归扫描网盘，查找所有 FID
+                    fid_map: dict[str, dict] = {}
+                    scan_queue = ["0"]
+                    while scan_queue:
+                        pdir = scan_queue.pop(0)
+                        try:
+                            for f in client.list_files(pdir):
+                                fid_map[f["fid"]] = f
+                                if f["is_dir"]:
+                                    scan_queue.append(f["fid"])
+                        except Exception:
+                            pass
 
                     # 填充文件列表
                     tree_files = []
@@ -641,19 +1038,24 @@ class QuarkGUI:
 
                     for i, fid in enumerate(fids, 1):
                         if self.cancel_event.is_set():
+                            self.root.after(0, self._update_status, fid, "已取消", "warn")
                             break
                         info = fid_map.get(fid)
                         name = info["file_name"] if info else fid
                         size = info["size"] if info else 0
+                        self.root.after(0, self._update_status, fid, "下载中...")
                         self.root.after(0, lambda n=name, idx=i, total=len(fids):
                                         self.log(f"[{idx}/{total}] {n}"))
                         try:
                             self._download_with_progress(downloader, client, fid, name, size)
-                            self.root.after(0, lambda n=name: self.log(f"  ✓ {n}", "ok"))
+                            self.root.after(0, self._update_status, fid, "✓ 完成", "ok")
                             self.root.after(0, self._update_progress, 100, "✓ 完成")
+                            self.root.after(0, lambda n=name: self.log(f"  ✓ {n}", "ok"))
                         except InterruptedError:
+                            self.root.after(0, self._update_status, fid, "已取消", "warn")
                             break
                         except Exception as e:
+                            self.root.after(0, self._update_status, fid, "✗ 失败", "err")
                             self.root.after(0, lambda n=name, err=str(e): self.log(f"  ✗ {n}: {err}", "err"))
 
                 elif fid_list:
@@ -749,10 +1151,16 @@ class QuarkGUI:
         def is_cancelled() -> bool:
             return self.cancel_event.is_set()
 
-        downloader.download_file(
-            fid, filename=filename, size=size, url=url,
-            on_progress=on_progress, is_cancelled=is_cancelled,
-        )
+        try:
+            downloader.download_file(
+                fid, filename=filename, size=size, url=url,
+                on_progress=on_progress, is_cancelled=is_cancelled,
+            )
+        except InterruptedError:
+            # 取消时清理流式下载的 .part 文件（分片下载已在 downloader 中清理）
+            part = downloader.output_dir / (filename + ".part")
+            part.unlink(missing_ok=True)
+            raise
 
     def _update_status(self, fid: str, status: str, tag: str = "normal") -> None:
         try:
