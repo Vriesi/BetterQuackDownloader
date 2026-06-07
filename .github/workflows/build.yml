@@ -30,7 +30,7 @@ jobs:
         python -m PyInstaller --clean QuarkDownloader.spec
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: QuarkDownloader
         path: dist/QuarkDownloader.exe
