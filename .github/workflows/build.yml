@@ -12,10 +12,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.12'
 
@@ -30,7 +30,7 @@ jobs:
         python -m PyInstaller --clean QuarkDownloader.spec
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: QuarkDownloader
         path: dist/QuarkDownloader.exe
