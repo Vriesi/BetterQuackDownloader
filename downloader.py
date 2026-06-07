@@ -206,6 +206,9 @@ class MultiThreadDownloader:
             except InterruptedError:
                 cancel_evt.set()
                 executor.shutdown(wait=False, cancel_futures=True)
+                # 取消时清理未完成的文件
+                part.unlink(missing_ok=True)
+                shutil.rmtree(chunks_dir, ignore_errors=True)
                 raise
 
         self._assemble(chunks_dir, part, n_chunks, expected_size)
